@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from passlib.context import CryptContext
 import jwt
 from pydantic import BaseModel
+from recommender import get_item_based_recommendations, get_popular_recommendations, get_random_recommendations, get_content_based_recommendations, get_transformer_recommendations
 
 # ==========================================
 # 导入数据库配置、表模型、推荐算法
@@ -276,7 +277,11 @@ def get_personalized_recommendations(algo: str = "content_based", token: str = D
     elif algo == "content_based":
         recommended_movies = get_content_based_recommendations(db, target_user_id=user.id, top_n=8)
         if not recommended_movies:
-            recommended_movies = get_popular_recommendations(db, 8)          
+            recommended_movies = get_popular_recommendations(db, 8)     
+    elif algo == "transformer":
+        recommended_movies = get_transformer_recommendations(db, target_user_id=user.id, top_n=8)
+        if not recommended_movies:
+            recommended_movies = get_popular_recommendations(db, 8)     
     elif algo == "popular":
         recommended_movies = get_popular_recommendations(db, 8)
     elif algo == "random":

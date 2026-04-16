@@ -7,6 +7,7 @@
           
           <el-select v-model="selectedAlgorithm" style="width: 160px;" size="default">
             <template #prefix>⚙️ 算法</template>
+            <el-option label="深度语义 (Transformer)" value="transformer" />
             <el-option label="剧情相似 (TF-IDF)" value="content_based" />
             <el-option label="协同过滤 (Item-CF)" value="item_cf" />
             <el-option label="豆瓣霸榜 (热门)" value="popular" />

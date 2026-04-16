@@ -6,6 +6,17 @@ import random
 import jieba
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
+import torch
+from sentence_transformers import SentenceTransformer, util
+
+print("🤖 正在加载 Transformer 深度语义模型 (初次启动可能需要下载，请耐心等待)...")
+# 使用专门针对中文语境微调的轻量级 Transformer 模型
+transformer_model = SentenceTransformer('shibing624/text2vec-base-chinese')
+print("✅ Transformer 模型加载完毕！")
+
+# 全局缓存向量矩阵，避免每次点击都重新计算（性能优化！）
+cached_embeddings = None
+cached_movie_list = None
 
 def get_item_based_recommendations(db: Session, target_user_id: int, top_n: int = 8):
     """
@@ -153,5 +164,72 @@ def get_content_based_recommendations(db: Session, target_user_id: int, top_n: i
     for item in sorted_recs:
         sim_movie_id = item[0]
         final_recommended_movies.append(next(m for m in all_movies if m.id == sim_movie_id))
+        
+    return final_recommended_movies
+
+def get_transformer_recommendations(db: Session, target_user_id: int, top_n: int = 8):
+    """
+    基于 Transformer 深度语义模型的推荐算法
+    """
+    global cached_embeddings, cached_movie_list
+    
+    # 1. 获取用户喜欢过的电影 (评分 >= 7.0)
+    user_ratings = db.query(models.Rating).filter(
+        models.Rating.user_id == target_user_id, 
+        models.Rating.score >= 7.0
+    ).all()
+    
+    if not user_ratings:
+        return [] # 冷启动
+        
+    liked_movie_ids = [r.movie_id for r in user_ratings]
+    
+    # 2. 获取全量电影（如果缓存里没有，就查数据库）
+    if cached_movie_list is None:
+        cached_movie_list = db.query(models.Movie).all()
+        if not cached_movie_list:
+            return []
+            
+    # 3. 核心计算：如果还没有对 250 部电影进行 Transformer 向量化，则全局计算一次
+    if cached_embeddings is None:
+        print("🧠 正在使用 Transformer 对全库电影进行高维语义编码...")
+        # 把电影标题和简介拼接起来喂给大模型
+        corpus = [f"{m.title} {m.description or ''}" for m in cached_movie_list]
+        # 转化为 PyTorch 的张量 (Tensor)
+        cached_embeddings = transformer_model.encode(corpus, convert_to_tensor=True)
+        print("⚡ 编码完成！")
+
+    # 4. 计算相似度并打分
+    recommendation_scores = {}
+    
+    for movie_id in liked_movie_ids:
+        # 找到用户喜欢的电影在列表里的索引
+        try:
+            idx = next(i for i, m in enumerate(cached_movie_list) if m.id == movie_id)
+        except StopIteration:
+            continue
+            
+        # 提取目标电影的张量
+        target_embedding = cached_embeddings[idx]
+        
+        # 利用 PyTorch 极速计算目标电影与全库电影的“余弦相似度张量”
+        cos_scores = util.cos_sim(target_embedding, cached_embeddings)[0]
+        
+        for sim_idx, score in enumerate(cos_scores):
+            sim_movie_id = cached_movie_list[sim_idx].id
+            # 排除掉用户已经看过的电影
+            if sim_movie_id not in liked_movie_ids:
+                if sim_movie_id not in recommendation_scores:
+                    recommendation_scores[sim_movie_id] = 0.0
+                # 累加相似度得分 (将 tensor 转为 Python 的 float)
+                recommendation_scores[sim_movie_id] += score.item()
+                
+    # 5. 排序并提取 Top N
+    sorted_recs = sorted(recommendation_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    
+    final_recommended_movies = []
+    for item in sorted_recs:
+        sim_movie_id = item[0]
+        final_recommended_movies.append(next(m for m in cached_movie_list if m.id == sim_movie_id))
         
     return final_recommended_movies
